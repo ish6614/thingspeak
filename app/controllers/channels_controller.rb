@@ -154,7 +154,13 @@ class ChannelsController < ApplicationController
   end
 
   def show
-    @channel = Channel.find(params[:id]) if params[:id]
+    @channel = Channel.find_by_id(params[:id])
+
+    # show the public show page if no channel found
+    if @channel.blank?
+      @channel = Channel.new(public_flag: false, name: "Channel #{params[:id]}", id: params[:id])
+      render "public_show" and return
+    end
 
     @title = @channel.name
     @domain = domain
@@ -178,10 +184,8 @@ class ChannelsController < ApplicationController
       format.html do
         if @mychannel
           render "private_show"
-          session[:errors] = nil
         else
           render "public_show"
-          session[:errors] = nil
         end
       end
       format.json { render :json => @channel.as_json(options) }
@@ -201,21 +205,18 @@ class ChannelsController < ApplicationController
     # make updating attributes easier for updates via api
     params[:channel] = params if params[:channel].blank?
 
-    if params["channel"]["video_type"].blank? && !params["channel"]["video_id"].blank?
-      @channel.errors.add(:base, t(:channel_video_type_blank))
-    end
+    @channel.assign_attributes(channel_params)
 
-    if @channel.errors.count <= 0
-      @channel.save_tags(params[:tags][:name]) if params[:tags].present?
-      @channel.assign_attributes(channel_params)
-      @channel.set_windows
-      @channel.save
-      @channel.set_ranking
-    else
-      session[:errors] = @channel.errors
+    if !@channel.valid?
+      @channel.errors.add(:base, t(:channel_video_type_blank))
+      flash[:alert] = @channel.errors.full_messages.join('. ')
       redirect_to channel_path(@channel.id, :anchor => "channelsettings") and return
     end
 
+    @channel.save_tags(params[:tags][:name]) if params[:tags].present?
+    @channel.set_windows
+    @channel.save
+    @channel.set_ranking
     flash[:notice] = t(:channel_update_success)
     respond_to do |format|
       format.json { render :json => @channel.to_json(Channel.private_options) }
@@ -317,7 +318,7 @@ class ChannelsController < ApplicationController
       talkback_key = params[:talkback_key] || false;
 
       # rate limit posts if channel is not social and timespan is smaller than the allowed window
-      render :text => '0' and return if (RATE_LIMIT && !tstream && !talkback_key && !channel.social && Time.now < channel.updated_at + RATE_LIMIT_FREQUENCY.to_i.seconds)
+      render :text => '0' and return if (RATE_LIMIT && !tstream && !talkback_key && !channel.social && channel.last_write_at.present? && Time.now < (channel.last_write_at + RATE_LIMIT_FREQUENCY.to_i.seconds))
 
       # if social channel, latitude MUST be present
       render :text => '0' and return if (channel.social && params[:latitude].blank?)
@@ -328,6 +329,8 @@ class ChannelsController < ApplicationController
       feed.entry_id = entry_id
       # set user agent
       channel.user_agent = get_header_value('USER_AGENT')
+      # set the last write at time
+      channel.last_write_at = Time.now
 
       # try to get created_at datetime if appropriate
       if params[:created_at].present?
@@ -366,11 +369,16 @@ class ChannelsController < ApplicationController
       feed.longitude = params[:long] if params[:long]
       feed.longitude = params[:longitude] if params[:longitude]
       feed.elevation = params[:elevation] if params[:elevation]
-      feed.location = params[:location] if params[:location]
 
       # if the saves were successful
       if channel.save && feed.save
         status = entry_id
+
+        # queue reacts, but don't cause an error
+        begin
+          channel.queue_react
+        rescue
+        end
 
         # check for tweet
         if params[:twitter] && params[:tweet]
@@ -509,6 +517,14 @@ class ChannelsController < ApplicationController
       if !row.blank?
         feed = Feed.new
 
+        # set location and status then delete the rows
+        # these 5 deletes must be performed in the proper (reverse) order
+        feed.status = row.delete_at(status_column) if status_column > 0
+        feed.location = row.delete_at(location_column) if location_column > 0
+        feed.elevation = row.delete_at(elevation_column) if elevation_column > 0
+        feed.longitude = row.delete_at(longitude_column) if longitude_column > 0
+        feed.latitude = row.delete_at(latitude_column) if latitude_column > 0
+
         # add the fields if they are from named columns, using reverse order
         feed.field8 = row.delete_at(field8_column) if field8_column != -1
         feed.field7 = row.delete_at(field7_column) if field7_column != -1
@@ -518,14 +534,6 @@ class ChannelsController < ApplicationController
         feed.field3 = row.delete_at(field3_column) if field3_column != -1
         feed.field2 = row.delete_at(field2_column) if field2_column != -1
         feed.field1 = row.delete_at(field1_column) if field1_column != -1
-
-        # set location and status then delete the rows
-        # these 5 deletes must be performed in the proper (reverse) order
-        feed.status = row.delete_at(status_column) if status_column > 0
-        feed.location = row.delete_at(location_column) if location_column > 0
-        feed.elevation = row.delete_at(elevation_column) if elevation_column > 0
-        feed.longitude = row.delete_at(longitude_column) if longitude_column > 0
-        feed.latitude = row.delete_at(latitude_column) if latitude_column > 0
 
         # remove entry_id column if necessary
         row.delete_at(entry_id_column) if entry_id_column > 0
@@ -548,6 +556,10 @@ class ChannelsController < ApplicationController
         feed.field6 = row[6] if feed.field6.blank?
         feed.field7 = row[7] if feed.field7.blank?
         feed.field8 = row[8] if feed.field8.blank?
+        feed.latitude = row[9] if feed.latitude.blank?
+        feed.longitude = row[10] if feed.longitude.blank?
+        feed.elevation = row[11] if feed.elevation.blank?
+        feed.status = row[12] if feed.status.blank?
 
         # save channel and feed
         feed.save
@@ -606,4 +618,3 @@ class ChannelsController < ApplicationController
     end
 
 end
-

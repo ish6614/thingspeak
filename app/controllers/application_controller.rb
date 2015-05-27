@@ -49,7 +49,9 @@ class ApplicationController < ActionController::Base
     if resource.is_a?(AdminUser)
       admin_dashboard_path
     else
-      channels_path
+      # make sure https is specified in the redirect url if we're in the production environment
+      url = @ssl ? "#{domain}channels" : "#{domain}channels"
+      return url
     end
   end
 
@@ -81,7 +83,7 @@ class ApplicationController < ActionController::Base
   protected
 
     def configure_permitted_parameters
-      devise_parameter_sanitizer.for(:sign_up) { |u| u.permit(:login, :email, :password, :password_confirmation, :remember_me) }
+      devise_parameter_sanitizer.for(:sign_up) { |u| u.permit(:login, :email, :password, :password_confirmation, :remember_me, :time_zone) }
       devise_parameter_sanitizer.for(:sign_in) { |u| u.permit(:login, :email, :password, :remember_me) }
       devise_parameter_sanitizer.for(:account_update) { |u| u.permit(:login, :email, :password, :password_confirmation, :time_zone, :password_current) }
     end
@@ -296,12 +298,17 @@ class ApplicationController < ActionController::Base
       # allow more past data if necessary
       get_old_data = (params[:results].present? || params[:start].present? || params[:days].present?) ? true : false
 
-      # set default start date
+      # set default start and end dates
       start_date = (get_old_data) ? Time.parse('2010-01-01') : (Time.now - 1.day)
       end_date = Time.now
-      start_date = (Time.now - params[:days].to_i.days) if params[:days]
-      start_date = ActiveSupport::TimeZone[Time.zone.name].parse(params[:start]) if params[:start]
-      end_date = ActiveSupport::TimeZone[Time.zone.name].parse(params[:end]) if params[:end]
+
+      # set new start and end dates if necessary
+      start_date = (Time.now - params[:days].to_i.days) if params[:days].present?
+      start_date = (Time.now - params[:minutes].to_i.minutes) if params[:minutes].present?
+      start_date = ActiveSupport::TimeZone[Time.zone.name].parse(params[:start]) if params[:start].present?
+      end_date = ActiveSupport::TimeZone[Time.zone.name].parse(params[:end]) if params[:end].present?
+
+      # set the date range
       date_range = (start_date..end_date)
       # only get a maximum of 30 days worth of data
       date_range = (end_date - 30.days..end_date) if ((end_date - start_date) > 30.days and !get_old_data)

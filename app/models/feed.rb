@@ -26,9 +26,6 @@ class Feed < ActiveRecord::Base
   extend FeedHelper
   belongs_to :channel
 
-  after_commit :queue_react
-  delegate :queue_react, :to => :channel
-
   self.include_root_in_json = false
 
   attr_readonly :created_at
@@ -51,7 +48,7 @@ class Feed < ActiveRecord::Base
   # for to_xml, return only the public attributes
   def self.public_options
     {
-      :except => [:id, :updated_at]
+      :except => [:id, :updated_at, :location]
     }
   end
 
@@ -73,7 +70,6 @@ class Feed < ActiveRecord::Base
       only += [:latitude]
       only += [:longitude]
       only += [:elevation]
-      only += [:location]
     end
 
     # add status if necessary
@@ -156,4 +152,3 @@ class Feed < ActiveRecord::Base
   end
 
 end
-
